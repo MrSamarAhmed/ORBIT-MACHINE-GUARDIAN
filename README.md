@@ -1,0 +1,311 @@
+# ORBIT Machine Guardian
+
+**Autonomous industrial reliability agent** — detects rotating-machinery
+faults, diagnoses likely causes, plans and executes corrective actions
+in a controlled simulator, and **independently verifies** recovery
+before closing an incident. Built for the **AMD Developer Hackathon
+ACT III**.
+
+Everything on the machine side is **simulated**. ORBIT never connects to
+or controls real industrial equipment.
+
+---
+
+## Core loop
+
+```
+OBSERVE  → DETECT → DIAGNOSE → PLAN → ACT → VERIFY → RESOLVED
+                                             (else)  → ESCALATED
+```
+
+Only the **deterministic verifier** can move an incident to `RESOLVED`.
+The diagnoser, planner, executor and any ML model can propose actions —
+they can never declare recovery. When recovery cannot be proven, the
+incident escalates instead of silently failing.
+
+---
+
+## Architecture
+
+```
+orbit/
+  config.py                  Motor configuration (bearing geometry, fs, thresholds)
+  simulator/motor.py         Deterministic 6205-bearing motor simulator
+  signalproc/features.py     10 sensor features (RMS, crest, kurtosis, spectral bands,
+                             envelope BPFO ratio, HF energy fraction, temperature)
+  detection/baseline.py      Robust MAD + relative-scale-floor z-score detector
+  diagnosis/knowledge.py     FMEA-style knowledge base: fault modes, signature rules,
+                             action plans, preconditions, verification conditions
+  diagnosis/engine.py        Ranked competing hypotheses with supporting AND
+                             contradicting evidence; ambiguity margin gate
+  actions/environment.py     Maintenance environment (spare quality, kit availability)
+  actions/executor.py        Simulated interventions; effect scales with resource quality
+  recovery/verifier.py       Deterministic recovery verifier — the ONLY authority
+                             that may declare RESOLVED
+  incident/lifecycle.py      Enumerated state machine with invalid-transition guards
+  incident/controller.py     Autonomous loop orchestration + per-phase audit trail
+  model/device.py            Device resolution (ROCm→CUDA→MPS→CPU), fail-closed
+  model/dataset.py           Leakage-free synthetic splits (disjoint seeds)
+  model/cnn.py               Compact 1D-CNN (~43k params) for vibration classification
+  model/train.py             Deterministic CPU training (seed 42)
+  model/inference.py         Device-abstracted inference + CPU/GPU parity check
+  model/benchmark.py         Reproducible batch-sweep latency / throughput benchmark
+  evaluation/metrics.py      Detection P/R/F1 + FPR, classifier held-out accuracy,
+                             recovery success / correct-escalation / no-action rates
+  api/app.py                 FastAPI surface (stateless, validation)
+  api/service.py             In-process orchestration for API + demo
+  demo/app.py                Streamlit UI: sensor trends, ranked hypotheses,
+                             evidence, before/after, verification, device, benchmarks
+```
+
+---
+
+## Quickstart
+
+```bash
+# 1. Environment
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env        # placeholders only, edit if you want to pin a device
+
+# 2. Tests
+.venv/bin/pytest -q
+
+# 3. Reproduce the classifier + benchmark + evaluation
+.venv/bin/python -m orbit.model.train
+.venv/bin/python -m orbit.model.benchmark
+.venv/bin/python -m orbit.evaluation
+
+# 4. Run the API and demo
+.venv/bin/uvicorn orbit.api.app:app --reload      # FastAPI on :8000
+.venv/bin/streamlit run orbit/demo/app.py         # Streamlit on :8501
+```
+
+`runtime/` (git-ignored) is where the model weights, benchmark JSON and
+evaluation JSON are written. Everything else is code.
+
+---
+
+## AMD / ROCm story (honest)
+
+The AMD angle is a first-class **device + benchmark path**, not a label
+on the README.
+
+`orbit/model/device.py` resolves devices in this order:
+
+1. ROCm / CUDA (reported as `rocm` when `torch.version.hip` is set)
+2. Apple MPS (local development on this Mac)
+3. CPU (always available; every other component is CPU-only)
+
+**Fail-closed:** requesting a device that isn't available raises with a
+clear message instead of silently falling back, so a benchmark can never
+misreport where it actually ran.
+
+The deterministic safety-critical path (simulator, detector, diagnosis,
+executor, verifier, controller) uses **only NumPy / SciPy** — no GPU, no
+torch. This means:
+
+- **Nothing on the demo critical path depends on a GPU being present.**
+- The GPU/ROCm path is used by the **corroborating classifier** whose
+  output is recorded alongside the deterministic diagnosis as supporting
+  evidence — never as the authority for recovery.
+
+### Local benchmark (Apple Silicon, PyTorch 2.8.0)
+
+Reproducible numbers on this machine (`runtime/benchmark/benchmark_20261012_180041.json`).
+Model: 43,331-param 1D-CNN on 2560-sample windows.
+
+| Device | batch | latency mean (ms) | throughput (windows/s) |
+|--------|------:|------------------:|-----------------------:|
+| cpu    |     1 |             0.486 |                   2058 |
+| cpu    |     8 |             0.879 |                   9103 |
+| cpu    |    64 |           495.420 |                    129 |
+| cpu    |   512 |          2722.833 |                    188 |
+| cpu    |  2048 |          9761.889 |                    210 |
+| mps    |     1 |             0.977 |                   1024 |
+| mps    |     8 |             0.936 |                   8551 |
+| mps    |    64 |             1.438 |                  44491 |
+| mps    |   512 |             7.483 |                  68421 |
+| mps    |  2048 |            28.449 |                  71988 |
+
+- **CPU vs MPS parity check** (same weights, same batch):
+  `max|diff| = 5.24e-10` — CPU and GPU paths are numerically equivalent.
+- At batch ≥ 64, MPS wins by **~180–340x**. At batch 1 CPU wins (MPS
+  launch overhead dominates). We report both honestly: an accelerator
+  helps when the workload actually batches, not by magic.
+- The `cpu` batch-64/512/2048 outliers are reproducible with
+  `torch.set_num_threads(1)` on this ARM64 Mac, so they reflect a real
+  torch conv1d code path on this CPU, not a measurement artifact. The
+  AMD instance uses a different code path (x86 + MIOpen).
+
+### What we do NOT claim
+
+- We have **not** run on AMD hardware yet — this dev machine is Apple
+  Silicon and has no ROCm. The `python -m orbit.model.benchmark` script
+  is what we will run on an AMD Developer Cloud ROCm instance to record
+  real `rocm` rows in the same JSON schema.
+- We do **not** extrapolate AMD numbers from Apple MPS numbers.
+- We do **not** claim that GPU acceleration helps the safety-critical
+  path. It doesn't need to — the deterministic core is CPU-only by
+  design.
+
+---
+
+## Data source (honest)
+
+ORBIT runs entirely on **synthetic simulator data**. There is **no real
+industrial data** in this repo yet.
+
+The simulator models a 6205 deep-groove ball bearing drive-end rig
+(the same bearing family used by the CWRU Bearing Data Center), a
+jittered BPFO impulse train ringing a structural resonance, imbalance
+as a raised 1x component, and a first-order thermal model — but these
+are **equations we tuned**, not measurements from a test rig.
+
+Every evaluation result explicitly carries:
+`"synthetic_only": true`, `"data_source": "ORBIT motor simulator (synthetic). No real industrial data in this file."`
+
+### Where CWRU fits in
+
+The intended next step is to download the CWRU .mat files, run the same
+`signalproc.features` extractor on them, and re-fit the baseline
+detector against real healthy windows. The feature extractor, detector,
+diagnoser, action library, and verifier are all decoupled from the
+simulator, so real data can be plugged in without touching the safety
+model. We have not done this yet — the numbers below are **synthetic
+only** and will not be presented as real-world accuracy.
+
+---
+
+## Measured results (synthetic)
+
+From `runtime/evaluation/results.json` (produced by `python -m orbit.evaluation`).
+Deterministic seeds. Calibration uses seed `7`; every evaluation split
+uses a disjoint seed (no train/test leakage).
+
+**Detection** (baseline anomaly detector, 25 windows per fault class):
+
+| Metric                         | Value |
+|--------------------------------|------:|
+| Normal false-positive rate     |   0.0 |
+| Overall detection F1           |   1.0 |
+| Bearing recall                 |   1.0 |
+| Imbalance recall               |   1.0 |
+| Overtemperature recall         |   1.0 |
+
+These are synthetic results on a clean simulator with well-separated
+fault signatures. They are **not** representative of how hard a real
+CWRU or field dataset will be. The harness exists so that the same
+measurement can be re-run on real data and the honest number reported.
+
+**Corroborating 1D-CNN** (held-out synthetic split, seed 9009, trained on
+disjoint seed 1001):
+
+- Accuracy: **1.000** on 240 held-out windows across 3 classes.
+- Per-class F1: 1.000 each.
+
+Same caveat as above — synthetic data is a much easier classification
+problem than real vibration. Reported honestly; the classifier is used
+only as **corroborating evidence**, never as the recovery authority.
+
+**Autonomous recovery** (7 scenarios, deterministic seeds):
+
+| Bucket               | Designed | Correct | Rate |
+|----------------------|---------:|--------:|-----:|
+| Designed to resolve  |        4 |       4 | 100% |
+| Designed to escalate |        2 |       2 | 100% |
+| Designed no-action   |        1 |       1 | 100% |
+| Mean end-to-end latency per cycle | | | **4.75 ms** |
+
+Scenario list:
+
+- `A_bearing_repair` — bearing severity 0.6 → RESOLVED via replace_bearing
+- `A_imbalance_balance` — imbalance 0.6 → RESOLVED via field_balancing
+- `A_overtemp_cooling` — cooling_efficiency 0.5 → RESOLVED via cooling_overhaul
+- `concurrent_faults` — bearing 0.3 + imbalance 0.55 → dominant repaired
+  first, residual handled by re-diagnosis in a second cycle → RESOLVED
+- `B_defective_spare` — spare_bearing_quality=0.0 → verifier rejects the
+  ineffective intervention → **ESCALATED**
+- `precond_no_spare` — spare_bearing_available=False → precondition
+  blocks the action → **ESCALATED**
+- `D_healthy` — no anomaly → **HEALTHY_NO_ACTION**
+
+Ambiguity-induced escalation is exercised separately in the controller
+unit tests with a controlled ambiguous engine, since the real engine is
+deterministic and rarely ambiguous on the clean synthetic signal. The
+escalation rates above are computed against the real engine's actual
+behaviour, not a fudge.
+
+**Test suite**: 122 passed, 1 skipped. The single skip
+(`tests/test_diagnosis.py::test_weak_fault_low_confidence_label`) is a
+deliberate honesty guard — at bearing severity 0.15 the fault is
+borderline and can cross the confident threshold for this particular
+seed; the test skips rather than asserting a confidence label the engine
+doesn't actually produce. The classifier-dependent tests run against the
+weights generated by `orbit.model.train` and are not skipped.
+
+---
+
+## Trust model: what safety-critical code is deterministic
+
+Design rules carried over from MaintAI's investigation trust model
+(inspected read-only for this project; not modified):
+
+- Every safety-critical decision is a **pure deterministic function**:
+  detection thresholds, hypothesis ranking, precondition checks, and
+  recovery verification. No LLM in the loop.
+- The **only** code path that can move an incident to `RESOLVED` is
+  `orbit/recovery/verifier.py::verify_recovery`. It requires every
+  declared verification condition to pass on **every** post-intervention
+  window; a single failing window keeps the incident open.
+- `orbit/incident/lifecycle.py::assert_transition` enumerates every
+  legal state edge and raises `InvalidTransition` on any other move, so
+  `RESOLVED` is only reachable from `VERIFYING`.
+- `orbit/actions/executor.py::check_preconditions` is **fail-closed**:
+  an unknown `requirement_id` raises rather than defaulting to permissive.
+- The optional neural classifier can only annotate the audit trail with
+  a corroboration verdict. It never triggers or blocks an intervention.
+- Ambiguous diagnosis ⇒ additional evidence rounds ⇒ escalate. The
+  controller will not act on a diagnosis it cannot separate from its
+  runner-up by a full ambiguity margin.
+
+---
+
+## Simulated vs real
+
+- **Simulated**: motor physics, sensor noise, thermal dynamics, all
+  interventions (bearing swap, field balancing, cooling overhaul), and
+  the maintenance environment (spare availability, resource quality).
+- **Real**: signal-processing math, baseline statistics, hypothesis
+  ranking, verification logic, state machine, HTTP surface, benchmark
+  timings. Nothing that decides whether an incident is RESOLVED fakes
+  its inputs.
+
+---
+
+## Repo safety
+
+- **No secrets committed.** `.env.example` contains placeholders only;
+  `.env` is git-ignored. No tokens appear in the tree.
+- **No MaintAI files modified.** MaintAI was inspected read-only
+  (public GitHub repo, cloned to `/tmp/maintai-inspect`) for reuse
+  assessment. Its trust-model patterns (atomic JSON state,
+  fail-closed protected-key ingestion, competing hypotheses with
+  supporting AND contradicting evidence) informed ORBIT's design.
+- No dependency has a license conflict with the project (all MIT /
+  BSD / Apache; the CWRU dataset is publicly available for research).
+
+---
+
+## Roadmap after this submission
+
+1. Download the CWRU .mat files and re-run detection / classifier
+   metrics against real healthy and faulted windows; report both
+   synthetic and CWRU numbers side by side.
+2. Run `python -m orbit.model.benchmark` on an AMD Developer Cloud
+   ROCm instance (MI300X or Instinct family) and merge the `rocm`
+   rows into the same JSON schema. Report CPU vs AMD GPU with real
+   numbers, no extrapolation.
+3. Add a second fault mode (misalignment) to the knowledge base to
+   pressure-test the ambiguity margin path on data where the fault
+   signatures genuinely overlap.
