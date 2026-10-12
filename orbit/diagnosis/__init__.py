@@ -4,6 +4,7 @@ from orbit.diagnosis.knowledge import (
     ACTION_LIBRARY,
     FaultMode,
     KNOWLEDGE_BASE,
+    Precondition,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "FaultHypothesis",
     "FaultMode",
     "KNOWLEDGE_BASE",
+    "Precondition",
 ]

@@ -49,13 +49,21 @@ class VerificationCondition:
 
 
 @dataclass(frozen=True)
+class Precondition:
+    """A machine-checkable requirement before an intervention may run."""
+
+    requirement_id: str
+    description: str
+
+
+@dataclass(frozen=True)
 class ActionPlan:
     """A structured corrective intervention plan."""
 
     action_id: str
     title: str
     description: str
-    preconditions: Tuple[str, ...]
+    preconditions: Tuple[Precondition, ...]
     expected_changes: Tuple[str, ...]
     verification: Tuple[VerificationCondition, ...]
     max_attempts: int = 1
@@ -89,7 +97,11 @@ def _act(action_id, title, description, preconditions, expected, verification,
          max_attempts=1, escalation_note="") -> ActionPlan:
     return ActionPlan(
         action_id=action_id, title=title, description=description,
-        preconditions=tuple(preconditions), expected_changes=tuple(expected),
+        preconditions=tuple(
+            Precondition(requirement_id=rid, description=desc)
+            for rid, desc in preconditions
+        ),
+        expected_changes=tuple(expected),
         verification=tuple(verification), max_attempts=max_attempts,
         escalation_note=escalation_note,
     )
@@ -119,8 +131,8 @@ BEARING_DEFECT = FaultMode(
             "Replace drive-end bearing",
             "Swap the 6205 drive-end bearing with a new unit (simulated).",
             preconditions=(
-                "Machine can be brought to a controlled stop",
-                "Replacement bearing available in stores",
+                ("machine_stoppable", "Machine can be brought to a controlled stop"),
+                ("spare_bearing_in_store", "Replacement bearing available in stores"),
             ),
             expected=(
                 "Envelope BPFO ratio returns to baseline",
@@ -163,8 +175,8 @@ SHAFT_IMBALANCE = FaultMode(
             "In-place rotor balancing",
             "Add correction mass at the computed angle on the rotor (simulated).",
             preconditions=(
-                "Machine can be brought to a controlled stop",
-                "Balancing kit with calibrated weights available",
+                ("machine_stoppable", "Machine can be brought to a controlled stop"),
+                ("balancing_kit_available", "Balancing kit with calibrated weights available"),
             ),
             expected=(
                 "1x amplitude returns to baseline tolerance",
@@ -201,8 +213,8 @@ COOLING_DEGRADATION = FaultMode(
             "Clean/replace cooling filters and fan",
             "Restore cooling airflow by cleaning filters and servicing the fan (simulated).",
             preconditions=(
-                "Machine can be run at reduced load during service",
-                "Maintenance window at least 15 minutes",
+                ("reduced_load_possible", "Machine can be run at reduced load during service"),
+                ("maintenance_window_15min", "Maintenance window at least 15 minutes"),
             ),
             expected=(
                 "Temperature falls toward the healthy equilibrium",
