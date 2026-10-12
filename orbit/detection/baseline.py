@@ -165,6 +165,13 @@ class BaselineDetector:
             temp_limit_exceeded=temp_limit_exceeded,
         )
 
+    def center_and_scale(self, feature: str) -> Tuple[float, float]:
+        """Fitted (median, robust scale) for a feature."""
+        self._require_fitted()
+        if feature not in self._centers:
+            raise ValueError(f"unknown feature {feature!r}")
+        return self._centers[feature], self._scales[feature]
+
     def _require_fitted(self) -> None:
         if not self.is_fitted:
             raise RuntimeError("detector is not fitted; call fit() with healthy data first")
