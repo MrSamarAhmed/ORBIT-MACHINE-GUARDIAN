@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment — never commit secrets
+.env
+
+# Runtime artifacts
+runtime/
+data/cwru/
+data/raw/
+*.pt
+*.pth
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
