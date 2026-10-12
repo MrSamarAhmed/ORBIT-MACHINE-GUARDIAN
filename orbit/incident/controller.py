@@ -16,7 +16,7 @@ Design rules (inherited from the MaintAI trust model):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from orbit.actions.environment import MaintenanceEnvironment
 from orbit.actions.executor import ActionExecutor, ActionResult
@@ -28,10 +28,22 @@ from orbit.recovery.verifier import VerificationOutcome, verify_recovery
 from orbit.signalproc.features import extract_features
 from orbit.simulator.motor import MachineState, MotorSimulator
 
+if TYPE_CHECKING:  # torch-backed, imported only for type checking
+    from orbit.model.inference import FaultClassifier as CorroboratingClassifier
+
 DEFAULT_MONITOR_WINDOWS = 3
 DEFAULT_MONITOR_INTERVAL_S = 60.0
 DEFAULT_EVIDENCE_ROUNDS = 3
 DEFAULT_VERIFICATION_WINDOWS = 3
+
+# Corroborating neural classifier over vibration windows. It never
+# decides actions: its probabilities are recorded alongside the
+# deterministic diagnosis as supporting evidence (AMD/ROCm path).
+CLASSIFIER_MODE_TO_HYPOTHESIS = {
+    "bearing": "bearing_outer_defect",
+    "imbalance": "shaft_imbalance",
+    "normal": None,
+}
 
 
 @dataclass
@@ -48,6 +60,7 @@ class IncidentRecord:
     phases: List[PhaseRecord] = field(default_factory=list)
     final_status: Optional[str] = None
     diagnosis: Optional[DiagnosisResult] = None
+    corroboration: Optional[Dict[str, Any]] = None
     action_id: Optional[str] = None
     verification: Optional[VerificationOutcome] = None
     escalation_reason: Optional[str] = None
@@ -62,6 +75,7 @@ class IncidentRecord:
             "final_status": self.final_status,
             "opened_by_breach": self.opened_by_breach,
             "diagnosis": self.diagnosis.as_summary() if self.diagnosis else None,
+            "corroboration": self.corroboration,
             "action_id": self.action_id,
             "attempts_used": self.attempts_used,
             "verification": self.verification.as_dict() if self.verification else None,
@@ -96,6 +110,7 @@ class IncidentController:
         engine: DiagnosisEngine,
         environment: Optional[MaintenanceEnvironment] = None,
         executor: Optional[ActionExecutor] = None,
+        classifier: Optional["CorroboratingClassifier"] = None,
         config: Optional[MotorConfig] = None,
         monitor_windows: int = DEFAULT_MONITOR_WINDOWS,
         monitor_interval_s: float = DEFAULT_MONITOR_INTERVAL_S,
@@ -115,6 +130,7 @@ class IncidentController:
         self.engine = engine
         self.environment = environment if environment is not None else MaintenanceEnvironment()
         self.executor = executor if executor is not None else ActionExecutor()
+        self.classifier = classifier
         self.config = config if config is not None else simulator.config
         self.monitor_windows = monitor_windows
         self.monitor_interval_s = float(monitor_interval_s)
@@ -133,10 +149,24 @@ class IncidentController:
             PhaseRecord(phase=target, summary=summary, evidence=evidence or {})
         )
 
-    def _sample_features(self) -> Tuple[Dict[str, float], AnomalyResult]:
+    def _sample_features(self):
         window = self.simulator.sample_window()
         features = extract_features(window, self.config)
-        return features, self.detector.predict(features)
+        return features, self.detector.predict(features), window
+
+    def _classify_corroboration(self, window) -> Optional[Dict[str, object]]:
+        """Run the (optionally GPU-accelerated) vibration classifier on a
+        raw window. Corroborating evidence only — never authoritative."""
+        if self.classifier is None:
+            return None
+        result = self.classifier.classify(window.vibration[None, :])
+        predicted_mode = CLASSIFIER_MODE_TO_HYPOTHESIS.get(result["predicted_class"])
+        return {
+            "predicted_class": result["predicted_class"],
+            "class_probabilities": result["class_probabilities"],
+            "mapped_hypothesis": predicted_mode,
+            "device": result["device"],
+        }
 
     # ------------------------------------------------------------------
     def run_cycle(self) -> CycleResult:
@@ -146,14 +176,14 @@ class IncidentController:
                 f"cannot start a cycle from {self.state!r}; incident still open"
             )
         windows = 0
-        first_anomaly: Optional[Tuple[Dict[str, float], AnomalyResult]] = None
+        first_anomaly: Optional[Tuple[Dict[str, float], AnomalyResult, Any]] = None
         for check in range(self.monitor_windows):
             if check > 0:
                 self.simulator.advance(self.monitor_interval_s)
-            features, anomaly = self._sample_features()
+            features, anomaly, window = self._sample_features()
             windows += 1
             if anomaly.is_anomaly:
-                first_anomaly = (features, anomaly)
+                first_anomaly = (features, anomaly, window)
                 break
         if first_anomaly is None:
             return CycleResult(
@@ -187,9 +217,10 @@ class IncidentController:
 
     # ------------------------------------------------------------------
     def _handle_incident(
-        self, incident: IncidentRecord, initial: Tuple[Dict[str, float], AnomalyResult]
+        self, incident: IncidentRecord,
+        initial: Tuple[Dict[str, float], AnomalyResult, Any],
     ) -> IncidentRecord:
-        features, anomaly = initial
+        features, anomaly, window = initial
 
         # --- DIAGNOSE (with extra evidence rounds when ambiguous) ---
         self._transition("DIAGNOSING", incident, "ranking fault hypotheses")
@@ -204,7 +235,7 @@ class IncidentController:
                 f"(round {round_index + 1}/{self.evidence_rounds})",
                 evidence={"hypotheses": diagnosis.as_summary()["hypotheses"]},
             )
-            features, anomaly = self._sample_features()
+            features, anomaly, window = self._sample_features()
             if not anomaly.is_anomaly:
                 self._resolve_incident(
                     incident,
@@ -228,6 +259,14 @@ class IncidentController:
         action = diagnosis.recommended_action
         assert action is not None  # confident diagnoses always carry an action
 
+        # Corroborating neural verdict (optional, AMD/ROCm-accelerated).
+        corroboration = self._classify_corroboration(window)
+        incident.corroboration = corroboration
+        if corroboration is not None:
+            corroboration["agrees_with_diagnosis"] = (
+                corroboration["mapped_hypothesis"] == diagnosis.primary.mode_id
+            )
+
         # --- PLAN ---
         ok, failures = self.executor.check_preconditions(action, self.environment)
         self._transition(
@@ -241,6 +280,7 @@ class IncidentController:
                 "contradicting_evidence": [
                     e.as_dict() for e in diagnosis.primary.contradicting
                 ],
+                "neural_corroboration": corroboration,
                 "action": action.action_id,
                 "preconditions": [
                     {"id": p.requirement_id, "description": p.description}
@@ -278,7 +318,7 @@ class IncidentController:
             self.simulator.advance(result.settle_time_s)
             post_rows = []
             for _ in range(self.verification_windows):
-                row, _ = self._sample_features()
+                row, _, _ = self._sample_features()
                 post_rows.append(row)
 
             self._transition("VERIFYING", incident, "verifying recovery conditions")
