@@ -30,6 +30,12 @@ class CycleRequest(BaseModel):
     environment: Optional[Dict[str, Any]] = Field(
         None, description="MaintenanceEnvironment overrides (resource quality, availability)"
     )
+    machine_state: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional MachineState override: bearing_severity, imbalance_severity, "
+        "cooling_efficiency, load. Enables concurrent faults / stress testing. "
+        "Omit to use the named scenario's state.",
+    )
     seed: int = Field(6006, ge=0, description="deterministic simulator seed")
     monitor_interval_s: float = Field(60.0, ge=0.0, description="seconds between monitoring checks")
     use_classifier: bool = Field(True, description="attach neural corroboration when weights exist")
@@ -77,6 +83,7 @@ def run_cycle(request: CycleRequest) -> Dict[str, Any]:
             scenario=request.scenario,
             cycles=request.cycles,
             environment=request.environment,
+            machine_state=request.machine_state,
             seed=request.seed,
             monitor_interval_s=request.monitor_interval_s,
             use_classifier=request.use_classifier,

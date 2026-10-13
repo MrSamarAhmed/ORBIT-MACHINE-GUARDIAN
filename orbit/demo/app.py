@@ -45,6 +45,14 @@ with st.sidebar:
     use_classifier = st.toggle("Neural corroboration", value=True,
                                help="Optional. Requires trained weights. Never authoritative.")
     defective_spare = st.toggle("Simulate defective spare (quality 0)", value=False)
+    with st.expander("Custom machine state (advanced)"):
+        st.caption("Override the named scenario with explicit severities to explore "
+                   "concurrent faults and stress cases.")
+        use_custom = st.toggle("Inject custom state", value=False)
+        c_bs = st.slider("Bearing severity", 0.0, 1.0, 0.25, 0.05)
+        c_ims = st.slider("Imbalance severity", 0.0, 1.0, 0.55, 0.05)
+        c_eff = st.slider("Cooling efficiency", 0.1, 1.0, 1.0, 0.05)
+        c_load = st.slider("Load", 0.1, 1.5, 1.0, 0.05)
     run = st.button("Run recovery cycle", type="primary")
 
 # --- Execution device panel -------------------------------------------------
@@ -84,17 +92,26 @@ if "history" not in st.session_state:
 
 if run:
     env_over = {"spare_bearing_quality": 0.0} if defective_spare else None
+    machine_state = None
+    if use_custom:
+        machine_state = {
+            "bearing_severity": float(c_bs),
+            "imbalance_severity": float(c_ims),
+            "cooling_efficiency": float(c_eff),
+            "load": float(c_load),
+        }
     result = service.run_recovery_cycle(
         scenario=scenario,
         cycles=cycles,
         environment=env_over,
+        machine_state=machine_state,
         monitor_interval_s=float(monitor_interval),
         use_classifier=use_classifier,
     )
     st.session_state["last_result"] = result
     for cyc in result["cycles"]:
         st.session_state["history"].append({
-            "scenario": scenario,
+            "scenario": scenario + (" (custom)" if machine_state else ""),
             "outcome": cyc["outcome"],
             "incident_id": (cyc["incident"] or {}).get("incident_id"),
         })

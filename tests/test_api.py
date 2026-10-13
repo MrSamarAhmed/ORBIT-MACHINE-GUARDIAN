@@ -95,3 +95,45 @@ def test_service_state_is_deterministic():
     b = service.run_recovery_cycle("imbalance", use_classifier=False)
     assert a["features_before"] == b["features_before"]
     assert a["cycles"][0]["outcome"] == b["cycles"][0]["outcome"]
+
+
+def test_custom_machine_state_resolves(client):
+    resp = client.post("/cycle", json={
+        "scenario": "bearing", "use_classifier": False,
+        "machine_state": {"bearing_severity": 0.6},
+    })
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["custom_state"] is True
+    assert result["state_before"]["bearing_severity"] == 0.6
+    assert result["cycles"][0]["outcome"] == "RESOLVED"
+
+
+def test_custom_concurrent_state_rediagnoses(client):
+    # Concurrent bearing + imbalance: the dominant fault is repaired first,
+    # the residual is re-diagnosed across a second cycle.
+    resp = client.post("/cycle", json={
+        "scenario": "bearing", "cycles": 2, "use_classifier": False,
+        "machine_state": {"bearing_severity": 0.25, "imbalance_severity": 0.55},
+    })
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["custom_state"] is True
+    assert result["cycles"][-1]["outcome"] == "RESOLVED"
+
+
+def test_custom_machine_state_rejects_unknown_field(client):
+    resp = client.post("/cycle", json={
+        "scenario": "bearing", "machine_state": {"warp_factor": 9}})
+    assert resp.status_code == 422
+
+
+def test_custom_machine_state_rejects_out_of_range(client):
+    resp = client.post("/cycle", json={
+        "scenario": "bearing", "machine_state": {"bearing_severity": 1.7}})
+    assert resp.status_code == 422
+
+
+def test_custom_machine_state_rejects_empty(client):
+    resp = client.post("/cycle", json={"scenario": "bearing", "machine_state": {}})
+    assert resp.status_code == 422

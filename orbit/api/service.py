@@ -163,6 +163,23 @@ def _environment_from_payload(payload: Dict[str, Any]) -> MaintenanceEnvironment
     return MaintenanceEnvironment(**payload)
 
 
+def _machine_state_from_payload(payload: Dict[str, Any]) -> MachineState:
+    """Build a MachineState from an optional JSON payload.
+
+    Fail-closed: unknown keys raise, and out-of-range severities raise via
+    MachineState validation, so a demo can never claim a state it did not
+    actually configure. An empty payload is invalid — callers only invoke
+    this when a custom state was explicitly requested.
+    """
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("machine_state must be a non-empty object of severity fields")
+    valid = set(STATE_FIELDS)
+    unknown = set(payload) - valid
+    if unknown:
+        raise ValueError(f"unknown machine_state fields: {sorted(unknown)}")
+    return MachineState(**payload)
+
+
 def _feature_snapshot(sim: MotorSimulator, config: MotorConfig) -> Dict[str, float]:
     feats = extract_features(sim.sample_window(), config)
     return {k: round(float(v), 4) for k, v in feats.items()}
@@ -172,20 +189,28 @@ def run_recovery_cycle(
     scenario: str,
     cycles: int = 1,
     environment: Optional[Dict[str, Any]] = None,
+    machine_state: Optional[Dict[str, Any]] = None,
     seed: int = 6006,
     monitor_interval_s: float = 60.0,
     use_classifier: bool = True,
 ) -> Dict[str, Any]:
     """Drive the full observe -> detect -> diagnose -> plan -> act ->
-    verify loop for a scenario and return the incident audit trail."""
+    verify loop for a scenario and return the incident audit trail.
+
+    ``machine_state`` optionally overrides the named scenario with an
+    explicit MachineState (custom severities / concurrent faults) for
+    stress testing and ambiguity demonstrations. When omitted, the named
+    scenario's state is used unchanged."""
     if cycles < 1 or cycles > 5:
         raise ValueError("cycles must be in [1, 5]")
 
     config = get_config()
     detector = get_detector()
     env = _environment_from_payload(environment or {})
+    state = (_machine_state_from_payload(machine_state)
+             if machine_state is not None else scenario_state(scenario))
     sim = _make_simulator(config, seed)
-    sim.set_state(scenario_state(scenario))
+    sim.set_state(state)
 
     classifier = _load_classifier() if use_classifier else None
     if isinstance(classifier, dict):
@@ -202,6 +227,7 @@ def run_recovery_cycle(
     )
 
     features_before = _feature_snapshot(sim, config)
+    state_before = _state_dict(sim.state)
     cycle_results = []
     for _ in range(cycles):
         result = controller.run_cycle()
@@ -217,8 +243,9 @@ def run_recovery_cycle(
 
     return {
         "scenario": scenario,
+        "custom_state": machine_state is not None,
         "environment": {k: getattr(env, k) for k in valid_env_fields()},
-        "state_before": _state_dict(controller.simulator.state),
+        "state_before": state_before,
         "features_before": features_before,
         "cycles": cycle_results,
         "features_after": features_after,
