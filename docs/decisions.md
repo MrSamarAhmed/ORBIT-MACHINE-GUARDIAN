@@ -109,3 +109,22 @@ at batch ≥ 64. We publish both.
   benchmark shows it. Small-workload overhead is a real result; hiding it
   would overstate the accelerator's value. AMD ROCm rows are pending a
   real ROCm run and are explicitly *not* extrapolated from Apple MPS.
+
+## ADR-009 — CWRU label mapping is narrow and directory-based; never assumed
+**Date:** 2026-10-13
+
+The optional CWRU evaluation (`orbit/evaluation/cwru.py`) maps only
+`normal -> normal` and `outer_race -> bearing`. `inner_race` and `ball`
+are excluded from the classifier (counted and reported), and provenance
+comes from a directory-name-as-label convention rather than a fabricated
+channel table.
+
+- **Why:** CWRU `.mat` files do not self-describe fault type, and the
+  official channel table could not be fetched without network access —
+  inventing it would fabricate labels. The synthetic `bearing` class is an
+  outer-race (BPFO) model; inner-race (BPFI) and ball (BSF) faults are a
+  different mechanism, so mapping them to `bearing` would mislabel the
+  evaluation. Exclusion with an explicit reason is the honest choice.
+- **Alternatives:** map all CWRU faults to one `bearing` class (rejected —
+  masks the mechanism mismatch); ship a built-in channel table (rejected —
+  could not verify it without the network).

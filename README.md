@@ -165,15 +165,59 @@ are **equations we tuned**, not measurements from a test rig.
 Every evaluation result explicitly carries:
 `"synthetic_only": true`, `"data_source": "ORBIT motor simulator (synthetic). No real industrial data in this file."`
 
-### Where CWRU fits in
+### Optional CWRU Bearing Data Center evaluation
 
-The intended next step is to download the CWRU .mat files, run the same
-`signalproc.features` extractor on them, and re-fit the baseline
-detector against real healthy windows. The feature extractor, detector,
-diagnoser, action library, and verifier are all decoupled from the
-simulator, so real data can be plugged in without touching the safety
-model. We have not done this yet — the numbers below are **synthetic
-only** and will not be presented as real-world accuracy.
+An **opt-in, fully separate** evaluation path for the CWRU Bearing Data
+Center dataset ships in `orbit/evaluation/cwru.py`. It never runs during
+normal startup, never downloads anything, and only executes when invoked
+explicitly:
+
+```bash
+python -m orbit.evaluation.cwru --data-dir data/cwru
+```
+
+CWRU `.mat` files do not self-describe their fault type, and the official
+channel-number → fault table lives on the CWRU website — we do not
+fabricate it. Instead ORBIT uses a **directory-name-as-label** convention:
+you place each recording under the folder naming its true fault class:
+
+```
+data/cwru/normal/*.mat       -> normal
+data/cwru/outer_race/*.mat   -> bearing    (the synthetic bearing mode IS outer-race)
+data/cwru/inner_race/*.mat   -> parsed; excluded from the classifier, counted
+data/cwru/ball/*.mat         -> parsed; excluded from the classifier, counted
+```
+
+The label mapping is deliberately narrow and never assumed: `inner_race`
+and `ball` use BPFI/BSF mechanisms that differ from ORBIT's outer-race
+(BPFO) model, so they are **excluded from classifier evaluation** (and
+reported as such) while still being scored by the unsupervised detector.
+CWRU has no imbalance class and no temperature channel, so the
+`imbalance` class and the thermal limit are not exercised there.
+
+Leakage control: splits are **recording-level** (each `.mat` hashed into
+train/val/test; overlapping 0.2 s windows never cross a split), and the
+detector is fit only on normal training recordings. The module reports
+per-class precision/recall/F1, a full confusion matrix, sample counts,
+excluded records, and writes to its own `runtime/evaluation/cwru_results.json`
+— never into the synthetic `results.json`. When the data is absent it
+writes an honest `available: false` and exits 0.
+
+Two measurements are produced, both clearly caveated:
+
+- **detector transfer** — baseline detector fit on real normal data, then
+  FPR on held-out normal windows and per-fault-type detection rate. This
+  tests whether ORBIT's detection *features* transfer to real vibration.
+- **classifier transfer** — the synthetic-trained CNN scored on the
+  mapped normal-vs-outer-race subset. This measures synthetic→real
+  *transfer* and is reported with that caveat attached, never as
+  real-world industrial accuracy.
+
+**Status:** the pipeline is implemented and tested (parsing, windowing,
+recording-level split integrity, confusion-matrix math, unsupported-label
+exclusion, missing-data handling) using small synthetic `.mat` fixtures.
+**No real CWRU download has been performed in this environment**, so no
+real CWRU numbers are reported anywhere in this repository.
 
 ---
 
@@ -299,9 +343,9 @@ Design rules carried over from MaintAI's investigation trust model
 
 ## Roadmap after this submission
 
-1. Download the CWRU .mat files and re-run detection / classifier
-   metrics against real healthy and faulted windows; report both
-   synthetic and CWRU numbers side by side.
+1. Obtain the CWRU `.mat` recordings, place them under `data/cwru/<class>/`,
+   and run `python -m orbit.evaluation.cwru` to report real detector- and
+   classifier-transfer numbers alongside the synthetic ones.
 2. Run `python -m orbit.model.benchmark` on an AMD Developer Cloud
    ROCm instance (MI300X or Instinct family) and merge the `rocm`
    rows into the same JSON schema. Report CPU vs AMD GPU with real
