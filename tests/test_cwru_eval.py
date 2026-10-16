@@ -112,11 +112,30 @@ def test_windowing_too_short_returns_empty():
 # --- split integrity -------------------------------------------------------
 def test_recording_level_split_no_overlap(cwru_dir):
     recs, _ = cwru.parse_recordings(cwru_dir, fs=FS)
-    splits = {str(r.path): cwru._split_for(r.path) for r in recs}
+    splits = {r.rel_path: cwru._split_for(r.rel_path) for r in recs}
     # every recording in exactly one split
     assert all(s in {"train", "val", "test"} for s in splits.values())
     # deterministic
-    assert splits == {str(r.path): cwru._split_for(r.path) for r in recs}
+    assert splits == {r.rel_path: cwru._split_for(r.rel_path) for r in recs}
+    # stable id is root-relative: <folder>/<file>
+    assert all("\\" not in rid and not rid.startswith("/") for rid in splits)
+
+
+def test_split_invariant_under_dataset_relocation(cwru_dir, tmp_path):
+    """Moving the dataset directory must not change split assignments."""
+    import shutil
+    recs_a, _ = cwru.parse_recordings(cwru_dir, fs=FS)
+    moved_root = tmp_path / "relocated_elsewhere" / "cwru"
+    moved_root.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(cwru_dir, moved_root)
+    recs_b, _ = cwru.parse_recordings(moved_root, fs=FS)
+
+    assert {r.rel_path for r in recs_a} == {r.rel_path for r in recs_b}
+    splits_a = {r.rel_path: cwru._split_for(r.rel_path) for r in recs_a}
+    splits_b = {r.rel_path: cwru._split_for(r.rel_path) for r in recs_b}
+    assert splits_a == splits_b
+    # and the absolute paths genuinely differ
+    assert {str(r.path) for r in recs_a}.isdisjoint({str(r.path) for r in recs_b})
 
 
 # --- metrics ---------------------------------------------------------------

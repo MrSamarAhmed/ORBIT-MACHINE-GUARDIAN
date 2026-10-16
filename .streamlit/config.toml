@@ -1,0 +1,12 @@
+# ORBIT Machine Guardian - Streamlit theme.
+# Applied automatically when the demo is launched from the repository root:
+#   .venv/bin/streamlit run orbit/demo/app.py
+[theme]
+base = "dark"
+primaryColor = "#22d3ee"
+backgroundColor = "#0d1117"
+secondaryBackgroundColor = "#131922"
+textColor = "#e6edf3"
+
+[browser]
+gatherUsageStats = false

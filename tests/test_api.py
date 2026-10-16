@@ -5,11 +5,14 @@ full observe -> verify loop returning an honest audit trail. No GPU or
 trained weights are required (corroboration is optional)."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from orbit.api.app import app
 from orbit.api import service
+from orbit.model.inference import WEIGHTS_PATH
 
 
 @pytest.fixture()
@@ -137,3 +140,48 @@ def test_custom_machine_state_rejects_out_of_range(client):
 def test_custom_machine_state_rejects_empty(client):
     resp = client.post("/cycle", json={"scenario": "bearing", "machine_state": {}})
     assert resp.status_code == 422
+
+
+def test_simulated_action_result_recorded(client):
+    resp = client.post("/cycle", json={"scenario": "bearing", "cycles": 1,
+                                       "use_classifier": False})
+    assert resp.status_code == 200
+    incident = resp.json()["cycles"][0]["incident"]
+    sim = next(p for p in incident["phases"] if p["phase"] == "SIMULATING")
+    ev = sim["evidence"]
+    assert isinstance(ev["action"], str) and ev["action"]
+    assert ev["executed"] is True
+    assert ev["state_before"]["bearing_severity"] == pytest.approx(0.6)
+    assert ev["state_after"]["bearing_severity"] == pytest.approx(0.0)
+    assert 0.0 < ev["effectiveness"] <= 1.0
+    assert ev["settle_time_s"] >= 0
+
+
+def test_classifier_disagreement_recorded_not_authoritative(client):
+    if not Path(WEIGHTS_PATH).exists():
+        pytest.skip("trained weights unavailable; neural corroboration is optional")
+    resp = client.post("/cycle", json={"scenario": "overtemperature", "cycles": 1,
+                                       "use_classifier": True})
+    assert resp.status_code == 200
+    result = resp.json()
+    incident = result["cycles"][0]["incident"]
+    planned = next(p for p in incident["phases"] if p["phase"] == "ACTION_PLANNED")
+    nc = planned["evidence"]["neural_corroboration"]
+    assert nc is not None
+    assert nc["agrees_with_diagnosis"] is False
+    # Disagreement is recorded honestly but never overrides the outcome:
+    # the deterministic verifier still resolves the incident.
+    assert incident["verification"]["passed"] is True
+    assert incident["final_status"] == "RESOLVED"
+
+
+def test_disabled_classifier_records_no_invented_confidence(client):
+    resp = client.post("/cycle", json={"scenario": "overtemperature", "cycles": 1,
+                                       "use_classifier": False})
+    assert resp.status_code == 200
+    result = resp.json()
+    incident = result["cycles"][0]["incident"]
+    planned = next(p for p in incident["phases"] if p["phase"] == "ACTION_PLANNED")
+    assert planned["evidence"]["neural_corroboration"] is None
+    assert incident["corroboration"] is None
+    assert incident["final_status"] == "RESOLVED"

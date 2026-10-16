@@ -19,6 +19,11 @@ OBSERVE  → DETECT → DIAGNOSE → PLAN → ACT → VERIFY → RESOLVED
 ```
 
 Only the **deterministic verifier** can move an incident to `RESOLVED`.
+Every incident also exposes a **Recovery Evidence Ledger** in the demo: the
+recorded evidence, whether the action was attempted vs executed, each
+verification criterion with its observed value and PASS/FAIL decision, and
+the recorded reason for resolution or escalation. Fields the system did not
+record are shown as "unavailable" - never filled in after the fact.
 The diagnoser, planner, executor and any ML model can propose actions —
 they can never declare recovery. When recovery cannot be proven, the
 incident escalates instead of silently failing.

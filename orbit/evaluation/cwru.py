@@ -85,6 +85,7 @@ class CwruRecording:
     """One parsed CWRU .mat recording (drive-end channel)."""
 
     path: Path
+    rel_path: str                # stable id "<folder>/<file>", root-independent
     folder_label: str            # directory-derived label
     orbit_class: Optional[str]   # mapped ORBIT class, or None if unsupported
     rpm: float
@@ -164,6 +165,7 @@ def parse_recordings(
                 recordings.append(
                     CwruRecording(
                         path=mat_path,
+                        rel_path=f"{folder.name}/{mat_path.name}",
                         folder_label=folder.name,
                         orbit_class=orbit_class,
                         rpm=rpm,
@@ -195,9 +197,13 @@ def window_signal(
     return [signal[s:s + window_samples] for s in starts]
 
 
-def _split_for(path: Path) -> str:
-    """Deterministic recording-level split assignment (50/25/25)."""
-    digest = int(hashlib.md5(str(path).encode()).hexdigest(), 16)
+def _split_for(rec_id: str) -> str:
+    """Deterministic recording-level split assignment (50/25/25).
+
+    Hashes the recording's root-relative id (``<folder>/<file>``), never
+    its absolute location, so moving the dataset directory cannot change
+    split assignments."""
+    digest = int(hashlib.md5(str(rec_id).encode()).hexdigest(), 16)
     bucket = digest % 100
     return "train" if bucket < 50 else ("val" if bucket < 75 else "test")
 
@@ -265,7 +271,7 @@ def evaluate_detector_transfer(
     (including unsupported inner_race/ball) is scored here."""
     by_split: Dict[str, List[CwruRecording]] = {"train": [], "val": [], "test": []}
     for rec in recordings:
-        by_split[_split_for(rec.path)].append(rec)
+        by_split[_split_for(rec.rel_path)].append(rec)
 
     train_normal = [r for r in by_split["train"] if r.folder_label == "normal"]
     calib_rows: List[Dict[str, float]] = []
@@ -411,8 +417,9 @@ def run_cwru_evaluation(
             "inner_race": "excluded (unsupported)",
             "ball": "excluded (unsupported)",
         },
-        "split_policy": "recording-level (md5 of path, 50/25/25); overlapping windows "
-                        "never cross splits",
+        "split_policy": "recording-level (md5 of root-relative '<folder>/<file>' id, "
+                        "50/25/25); relocating the dataset directory does not change "
+                        "assignments; overlapping windows never cross splits",
         "imbalance_note": "CWRU has no imbalance class; the 'imbalance' synthetic class "
                          "is not exercised here",
         "temperature_note": "CWRU has no temperature channel; thermal features set to "

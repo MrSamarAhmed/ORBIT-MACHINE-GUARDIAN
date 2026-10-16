@@ -15,7 +15,8 @@ Design rules (inherited from the MaintAI trust model):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from orbit.actions.environment import MaintenanceEnvironment
@@ -57,6 +58,7 @@ class PhaseRecord:
 class IncidentRecord:
     incident_id: str
     opened_by_breach: List[str]
+    opened_at_utc: Optional[str] = None
     phases: List[PhaseRecord] = field(default_factory=list)
     final_status: Optional[str] = None
     diagnosis: Optional[DiagnosisResult] = None
@@ -72,6 +74,7 @@ class IncidentRecord:
     def as_dict(self) -> Dict[str, Any]:
         return {
             "incident_id": self.incident_id,
+            "opened_at_utc": self.opened_at_utc,
             "final_status": self.final_status,
             "opened_by_breach": self.opened_by_breach,
             "diagnosis": self.diagnosis.as_summary() if self.diagnosis else None,
@@ -201,6 +204,7 @@ class IncidentController:
         record = IncidentRecord(
             incident_id=f"INC-{self._incident_counter:03d}",
             opened_by_breach=[b.as_evidence() for b in anomaly.breaches],
+            opened_at_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
         self.incidents.append(record)
         self._transition(
@@ -311,9 +315,24 @@ class IncidentController:
                 incident,
                 f"simulating intervention: {action.title} "
                 f"(attempt {incident.attempts_used}/{action.max_attempts})",
+                evidence={"action": action.action_id},
             )
             result: ActionResult = self.executor.execute(
                 action, self.simulator, self.environment
+            )
+            incident.phases[-1].evidence.update(
+                {
+                    "executed": result.executed,
+                    "effectiveness": round(result.effectiveness, 4),
+                    "settle_time_s": result.settle_time_s,
+                    "state_before": {
+                        k: round(v, 4) for k, v in asdict(result.state_before).items()
+                    },
+                    "state_after": {
+                        k: round(v, 4) for k, v in asdict(result.state_after).items()
+                    },
+                    "notes": list(result.notes),
+                }
             )
             self.simulator.advance(result.settle_time_s)
             post_rows = []
