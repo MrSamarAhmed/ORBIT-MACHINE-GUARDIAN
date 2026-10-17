@@ -135,13 +135,57 @@ Model: 43,331-param 1D-CNN on 2560-sample windows.
 
 - **CPU vs MPS parity check** (same weights, same batch):
   `max|diff| = 5.24e-10` — CPU and GPU paths are numerically equivalent.
-- At batch ≥ 64, MPS wins by **~180–340x**. At batch 1 CPU wins (MPS
+- At batch ≥ 64, MPS wins by **~343–364x** (throughput ratio per the
+  table above). At batch 1 and 8 CPU wins (MPS
   launch overhead dominates). We report both honestly: an accelerator
   helps when the workload actually batches, not by magic.
 - The `cpu` batch-64/512/2048 outliers are reproducible with
   `torch.set_num_threads(1)` on this ARM64 Mac, so they reflect a real
   torch conv1d code path on this CPU, not a measurement artifact. The
   AMD instance uses a different code path (x86 + MIOpen).
+
+### Extended benchmark sweep (2026-10-17, Apple Silicon, PyTorch 2.8.0)
+
+Same harness and methodology (`orbit.model.benchmark`: 10 warm-up + 30
+timed iterations per configuration, fixed dataset seed 777), run with
+the batch set extended to include 128, 256 and 1024:
+
+```python
+import orbit.model.benchmark as b
+b.BATCH_SIZES = (1, 8, 64, 128, 256, 512, 1024, 2048)
+b.run_benchmark()
+```
+
+Saved to `runtime/benchmark/benchmark_20261017_152642.json`.
+Devices measured: arm64 CPU (`arm`) and Apple Silicon MPS. No AMD ROCm
+hardware was involved — see "What we do NOT claim" below.
+
+| Device | batch | latency mean (ms) | throughput (windows/s) |
+|--------|------:|------------------:|-----------------------:|
+| cpu    |     1 |             0.507 |                   1973 |
+| cpu    |     8 |             0.883 |                   9061 |
+| cpu    |    64 |           478.028 |                    134 |
+| cpu    |   128 |           829.463 |                    154 |
+| cpu    |   256 |          1625.756 |                    158 |
+| cpu    |   512 |          2729.003 |                    188 |
+| cpu    |  1024 |          5019.629 |                    204 |
+| cpu    |  2048 |          9893.148 |                    207 |
+| mps    |     1 |             1.062 |                    942 |
+| mps    |     8 |             1.121 |                   7139 |
+| mps    |    64 |             1.548 |                  41345 |
+| mps    |   128 |             2.562 |                  49958 |
+| mps    |   256 |             4.436 |                  57706 |
+| mps    |   512 |             8.530 |                  60021 |
+| mps    |  1024 |            14.720 |                  69566 |
+| mps    |  2048 |            29.751 |                  68839 |
+
+- **CPU vs MPS parity check** (same weights, same batch):
+  `max|diff| = 5.24e-10` — PASS.
+- CPU wins at batch 1 and 8; at batch ≥ 64 MPS wins by **~309–366x**
+  (throughput ratio). MPS throughput plateaus around ~60–70k windows/s
+  at batch ≥ 512. The CPU numbers reproduce the batch-64 jump and the
+  gradual throughput recovery toward batch 2048 seen above; nothing was
+  smoothed, corrected or omitted.
 
 ### What we do NOT claim
 
@@ -285,7 +329,7 @@ deterministic and rarely ambiguous on the clean synthetic signal. The
 escalation rates above are computed against the real engine's actual
 behaviour, not a fudge.
 
-**Test suite**: 122 passed, 1 skipped. The single skip
+**Test suite**: 170 passed, 1 skipped. The single skip
 (`tests/test_diagnosis.py::test_weak_fault_low_confidence_label`) is a
 deliberate honesty guard — at bearing severity 0.15 the fault is
 borderline and can cross the confident threshold for this particular

@@ -102,8 +102,9 @@ falling back to CPU.
 ## ADR-008 — Report the CPU/GPU crossover honestly
 **Date:** 2026-10-12
 
-The benchmark shows CPU beating MPS at batch 1 and MPS winning ~180–340x
-at batch ≥ 64. We publish both.
+The benchmark shows CPU beating MPS at batch 1 and MPS winning ~343–364x
+at batch ≥ 64 (per the recorded measurements in the README). We publish
+both.
 
 - **Why:** the brief says never claim acceleration helps unless the
   benchmark shows it. Small-workload overhead is a real result; hiding it
