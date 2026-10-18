@@ -25,9 +25,13 @@ from orbit.model.device import describe_environment
 from orbit.simulator.motor import SCENARIOS, MachineState, MotorSimulator
 from orbit.signalproc.features import FEATURE_NAMES, extract_features
 
-EVALUATION_PATH = Path("runtime/evaluation/results.json")
-BENCHMARK_DIR = Path("runtime/benchmark")
-MODEL_WEIGHTS_PATH = Path("runtime/model/fault_cnn.pt")
+# Anchored to the repository root (not the current working directory) so
+# the demo reads the same artifacts whether launched from the repo root,
+# a subdirectory, or Streamlit Community Cloud.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+EVALUATION_PATH = _REPO_ROOT / "runtime/evaluation/results.json"
+BENCHMARK_DIR = _REPO_ROOT / "runtime/benchmark"
+MODEL_WEIGHTS_PATH = _REPO_ROOT / "runtime/model/fault_cnn.pt"
 
 # Precedence of the demo device: prefer GPU/ROCm when available,
 # fall back to CPU silently for the deterministic pipeline (which does

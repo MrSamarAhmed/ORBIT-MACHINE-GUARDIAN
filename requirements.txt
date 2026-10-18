@@ -1,3 +1,7 @@
+# torch CPU wheels for Linux (Streamlit Community Cloud has no GPU): pip
+# prefers 2.8.0+cpu there and falls back to the normal PyPI wheel on this
+# Mac. Without this line the cloud build pulls multi-GB CUDA wheels.
+--extra-index-url https://download.pytorch.org/whl/cpu
 numpy==2.0.2
 scipy==1.13.1
 torch==2.8.0

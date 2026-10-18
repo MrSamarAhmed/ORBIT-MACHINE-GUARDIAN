@@ -32,6 +32,22 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+import os
+
+# Streamlit Community Cloud delivers credentials via st.secrets, not the
+# process environment; mirror the AMD Token Factory keys that
+# orbit/amd/config.py reads so the advisory works on a hosted deploy.
+# Values are never printed or logged; absent secrets change nothing.
+try:
+    for _k in ("RADEON_API_KEY", "RADEON_MODEL", "RADEON_BASE_URL",
+               "RADEON_TIMEOUT_S"):
+        if _k not in os.environ:
+            _v = st.secrets.get(_k)
+            if _v:
+                os.environ[_k] = str(_v)
+except Exception:
+    pass  # no secrets file (local runs): environment/.env govern
+
 from orbit import __version__
 from orbit.api import service
 from orbit.demo.scenarios import DEMO_SCENARIOS, build_incident_ledger, incident_timeline

@@ -113,6 +113,25 @@ cp .env.example .env        # placeholders only, edit if you want to pin a devic
 `runtime/` (git-ignored) is where the model weights, benchmark JSON and
 evaluation JSON are written. Everything else is code.
 
+### Deploying the demo to Streamlit Community Cloud
+
+The demo is a single Streamlit process — it uses the in-process service
+layer, so no separate FastAPI/uvicorn server is required.
+
+1. Push this repository to GitHub (public).
+2. Open <https://share.streamlit.io>, sign in with GitHub, **Create app**.
+3. Repository `MrSamarAhmed/ORBIT-MACHINE-GUARDIAN` · branch `main` ·
+   main file path `orbit/demo/app.py` · Python 3.11.
+4. Optional AMD advisory: under **Advanced settings → Secrets** set
+   `RADEON_API_KEY = "<your key>"` (never commit a real key;
+   `.streamlit/secrets.toml` is git-ignored). Without a key the full
+   deterministic pipeline still runs and the advisory is honestly marked
+   "not configured" — no simulated AI output.
+5. `runtime/` artifacts are git-ignored, so a fresh cloud deploy shows
+   honest "run python -m orbit.model.benchmark / .evaluation" captions
+   on tab 04 instead of numbers, and the classifier badge reports
+   "unavailable, deterministic pipeline active".
+
 ---
 
 ## AMD / ROCm story (honest)

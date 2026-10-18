@@ -9,6 +9,7 @@ __pycache__/
 
 # Environment — never commit secrets
 .env
+.streamlit/secrets.toml
 
 # Runtime artifacts
 runtime/
