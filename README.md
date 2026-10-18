@@ -131,6 +131,12 @@ layer, so no separate FastAPI/uvicorn server is required.
    honest "run python -m orbit.model.benchmark / .evaluation" captions
    on tab 04 instead of numbers, and the classifier badge reports
    "unavailable, deterministic pipeline active".
+6. The hosted demo renders on the **deterministic CPU pipeline only**.
+   PyTorch is imported lazily, so a GPU-less free-tier deploy (no
+   `runtime/` weights) never loads torch on the critical path: the
+   dashboard, detector, diagnosis, executor and verifier all run on
+   NumPy/SciPy, and torch is touched only if trained corroboration
+   weights are present. No AMD GPU/ROCm execution is implied.
 
 ---
 
