@@ -13,6 +13,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+if __name__ == "__main__":
+    # Streamlit Cloud may still point at this legacy entry point. Delegate
+    # only when executed as a script; normal imports keep this module pure.
+    import runpy
+    from pathlib import Path
+
+    _demo_app = Path(__file__).resolve().parents[1] / "demo" / "app.py"
+    runpy.run_path(str(_demo_app), run_name="__main__")
+
+
 @dataclass(frozen=True)
 class MaintenanceEnvironment:
     machine_stoppable: bool = True
