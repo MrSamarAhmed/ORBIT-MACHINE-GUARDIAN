@@ -23,7 +23,6 @@ from orbit.detection.baseline import BaselineDetector
 from orbit.diagnosis.engine import DiagnosisEngine
 from orbit.incident.controller import IncidentController
 from orbit.model.dataset import CLASSES, CLASS_TO_INDEX, generate_split
-from orbit.model.inference import WEIGHTS_PATH, FaultClassifier
 from orbit.simulator.motor import MachineState, MotorSimulator
 from orbit.signalproc.features import extract_features
 
@@ -127,6 +126,8 @@ def evaluate_detection(config: MotorConfig, detector: BaselineDetector,
 
 
 def evaluate_classifier(config: MotorConfig) -> Dict[str, object]:
+    from orbit.model.inference import WEIGHTS_PATH, FaultClassifier
+
     if not WEIGHTS_PATH.exists():
         return {"available": False, "reason": "run python -m orbit.model.train first"}
     clf = FaultClassifier.load("cpu")

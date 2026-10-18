@@ -21,7 +21,7 @@ from orbit.detection.baseline import BaselineDetector
 from orbit.diagnosis.engine import DiagnosisEngine
 from orbit.evaluation.metrics import CALIBRATION_SEED, CALIBRATION_WINDOWS, _fit_detector
 from orbit.incident.controller import IncidentController
-from orbit.model.device import describe_environment
+from orbit.model.device import describe_runtime
 from orbit.simulator.motor import SCENARIOS, MachineState, MotorSimulator
 from orbit.signalproc.features import FEATURE_NAMES, extract_features
 
@@ -116,7 +116,6 @@ def amd_advisor_status() -> Dict[str, Any]:
 
 
 def device_summary() -> Dict[str, Any]:
-    env = describe_environment()
     classifier = _load_classifier()
     if isinstance(classifier, dict):
         corroboration = {"available": False, "error": classifier["load_error"]}
@@ -127,6 +126,10 @@ def device_summary() -> Dict[str, Any]:
         }
     else:
         corroboration = {"available": True, "device": classifier.device_info.as_dict()}
+    # Runtime is probed after the classifier so a loaded torch backend (MPS /
+    # ROCm / CUDA) is reflected; on a torch-free deploy it reports CPU honestly
+    # without ever importing torch just to fill the status badge.
+    env = describe_runtime()
     return {
         "environment": env,
         "classifier": corroboration,

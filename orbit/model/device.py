@@ -13,10 +13,9 @@ benchmark can never misreport where it ran.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from typing import Optional
-
-import torch
 
 
 @dataclass(frozen=True)
@@ -29,7 +28,8 @@ class DeviceInfo:
     cuda_version: Optional[str]
 
     @property
-    def torch_device(self) -> torch.device:
+    def torch_device(self):
+        import torch
         if self.device_type == "cuda":
             return torch.device("cuda", 0)
         return torch.device(self.device_type)
@@ -48,6 +48,8 @@ class DeviceInfo:
 def resolve_device(requested: Optional[str] = None) -> DeviceInfo:
     """Resolve the execution device. ``requested`` may be None (auto),
     'auto', 'cpu', 'cuda'/'rocm', or 'mps'."""
+    import torch  # lazy: the deterministic pipeline never needs torch
+
     requested = (requested or os.environ.get("ORBIT_DEVICE") or "auto").strip().lower()
     if requested == "rocm":
         requested = "cuda"  # ROCm accelerators are exposed via the CUDA API
@@ -120,3 +122,33 @@ def describe_environment() -> dict:
         "machine": platform.machine(),
         **info.as_dict(),
     }
+
+
+def describe_runtime() -> dict:
+    """UI runtime snapshot that never forces a torch import.
+
+    The deterministic dashboard renders on CPU without torch, so a hosted
+    deploy (which has no GPU and may lack the trained corroboration
+    weights) reports an honest CPU environment instead of importing torch
+    just to fill a status badge. If torch is already loaded (e.g. the
+    classifier was initialised), the real resolved device is reported.
+    """
+    import platform
+
+    snapshot = {
+        "python_version": sys.version.split()[0],
+        "os_platform": platform.platform(),
+        "platform": "cpu",
+        "machine": platform.machine(),
+        "device_type": "cpu",
+        "device_name": _cpu_name(),
+        "torch_version": "not loaded (deterministic CPU path)",
+        "hip_version": None,
+        "cuda_version": None,
+    }
+    if "torch" in sys.modules:
+        try:
+            snapshot.update(resolve_device().as_dict())
+        except Exception:
+            pass  # keep the honest CPU snapshot if resolution fails
+    return snapshot
