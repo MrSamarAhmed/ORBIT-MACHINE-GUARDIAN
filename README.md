@@ -11,6 +11,30 @@ or controls real industrial equipment.
 
 ---
 
+## Demo Video
+
+Watch ORBIT Machine Guardian detect a simulated machine fault, recommend
+corrective action, and evaluate whether recovery can be verified
+(3:00, 1080p, MP4).
+
+[▶ Watch the ORBIT Machine Guardian Demo](submission-video/orbit-machine-guardian-final.mp4)
+
+The demonstration covers:
+- Machine fault detection and diagnosis.
+- AMD Token Factory-powered AI advisory (recorded, live-verified result).
+- Safety-checked corrective action planning.
+- Evidence-based recovery verification.
+- Escalation when recovery cannot be confirmed.
+- Verification-vs-naive evaluation and a transparent business-value
+  projection calculator.
+
+> This prototype uses simulated machine scenarios and has not been
+> validated on real industrial equipment. AMD Token Factory provides
+> advisory reasoning; this project does not claim AMD GPU or ROCm
+> execution unless independently demonstrated.
+
+---
+
 ## Core loop
 
 ```
