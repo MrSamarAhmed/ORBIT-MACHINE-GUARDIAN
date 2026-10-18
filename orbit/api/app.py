@@ -39,6 +39,14 @@ class CycleRequest(BaseModel):
     seed: int = Field(6006, ge=0, description="deterministic simulator seed")
     monitor_interval_s: float = Field(60.0, ge=0.0, description="seconds between monitoring checks")
     use_classifier: bool = Field(True, description="attach neural corroboration when weights exist")
+    use_amd: bool = Field(
+        False,
+        description=(
+            "attach the optional AMD Token Factory advisory (requires "
+            "RADEON_API_KEY). Its recommendation is recorded in the audit "
+            "trail; it never executes actions or declares recovery."
+        ),
+    )
 
 
 @app.get("/health")
@@ -87,6 +95,7 @@ def run_cycle(request: CycleRequest) -> Dict[str, Any]:
             seed=request.seed,
             monitor_interval_s=request.monitor_interval_s,
             use_classifier=request.use_classifier,
+            use_amd=request.use_amd,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

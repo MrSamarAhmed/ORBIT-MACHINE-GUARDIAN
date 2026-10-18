@@ -77,6 +77,40 @@ def _load_classifier():
         return {"load_error": str(exc)}
 
 
+def _load_amd_advisor():
+    """Load the AMD Token Factory advisor if credentials are configured.
+
+    Optional by design, like the classifier: no configured key returns
+    None so the deterministic pipeline runs unchanged, and a load error
+    is returned as a dict the caller can record instead of raising.
+    Importing and constructing this never performs an API call.
+    """
+    try:
+        from orbit.amd.config import AmdConfig
+
+        config = AmdConfig.from_env()
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        return {"load_error": str(exc)}
+    if config is None:
+        return None
+    try:
+        from orbit.amd.advisor import AmdAdvisor
+
+        return AmdAdvisor(config)
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        return {"load_error": str(exc)}
+
+
+def amd_advisor_status() -> Dict[str, Any]:
+    """Whether the AMD advisory is configured — no API call is made."""
+    advisor = _load_amd_advisor()
+    if advisor is None:
+        return {"configured": False, "reason": "RADEON_API_KEY not set"}
+    if isinstance(advisor, dict):
+        return {"configured": False, "error": advisor["load_error"]}
+    return {"configured": True, "model": advisor.config.model}
+
+
 def device_summary() -> Dict[str, Any]:
     env = describe_environment()
     classifier = _load_classifier()
@@ -89,7 +123,11 @@ def device_summary() -> Dict[str, Any]:
         }
     else:
         corroboration = {"available": True, "device": classifier.device_info.as_dict()}
-    return {"environment": env, "classifier": corroboration}
+    return {
+        "environment": env,
+        "classifier": corroboration,
+        "amd_advisor": amd_advisor_status(),
+    }
 
 
 def _make_simulator(config: MotorConfig, seed: int) -> MotorSimulator:
@@ -193,6 +231,7 @@ def run_recovery_cycle(
     seed: int = 6006,
     monitor_interval_s: float = 60.0,
     use_classifier: bool = True,
+    use_amd: bool = False,
 ) -> Dict[str, Any]:
     """Drive the full observe -> detect -> diagnose -> plan -> act ->
     verify loop for a scenario and return the incident audit trail.
@@ -200,7 +239,13 @@ def run_recovery_cycle(
     ``machine_state`` optionally overrides the named scenario with an
     explicit MachineState (custom severities / concurrent faults) for
     stress testing and ambiguity demonstrations. When omitted, the named
-    scenario's state is used unchanged."""
+    scenario's state is used unchanged.
+
+    ``use_amd`` enables the optional AMD Token Factory advisory: it reads
+    the recorded evidence and its recommendation is recorded in the audit
+    trail. It never selects the executed action, never executes anything,
+    and can never declare recovery. When no credentials are configured
+    the run proceeds without an advisory."""
     if cycles < 1 or cycles > 5:
         raise ValueError("cycles must be in [1, 5]")
 
@@ -216,12 +261,17 @@ def run_recovery_cycle(
     if isinstance(classifier, dict):
         classifier = None  # load error: fall back to deterministic-only
 
+    amd_advisor = _load_amd_advisor() if use_amd else None
+    if isinstance(amd_advisor, dict):
+        amd_advisor = None  # load error: fall back to deterministic-only
+
     controller = IncidentController(
         simulator=sim,
         detector=detector,
         engine=DiagnosisEngine(),
         environment=env,
         classifier=classifier,
+        amd_advisor=amd_advisor,
         config=config,
         monitor_interval_s=monitor_interval_s,
     )

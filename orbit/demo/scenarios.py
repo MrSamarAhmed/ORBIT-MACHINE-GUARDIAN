@@ -208,6 +208,10 @@ def build_incident_ledger(
     if corroboration is None:
         unavailable.append("neural_corroboration")
 
+    amd_advisory = planned.get("amd_advisory") if planned else None
+    if amd_advisory is None:
+        unavailable.append("amd_advisory")
+
     if incident.get("escalation_reason"):
         reason: Optional[str] = incident["escalation_reason"]
     elif resolved_phase is not None:
@@ -215,6 +219,23 @@ def build_incident_ledger(
     else:
         reason = None
         unavailable.append("resolution_reason")
+
+    if amd_advisory is None:
+        amd_note: Optional[str] = None
+    elif not amd_advisory.get("available"):
+        amd_note = (
+            f"unavailable ({amd_advisory.get('reason') or 'unknown reason'}); "
+            "deterministic pipeline governed"
+        )
+    else:
+        amd_note = (
+            f"{amd_advisory.get('model')} recommended "
+            f"{amd_advisory.get('recommended_action')!r} "
+            f"(supported: {amd_advisory.get('action_supported')}, "
+            f"agrees_with_plan: {amd_advisory.get('agrees_with_plan')}, "
+            f"needs_escalation: {amd_advisory.get('needs_escalation')}) - "
+            "advisory only, not the executed action"
+        )
 
     return {
         "incident_id": incident.get("incident_id"),
@@ -224,6 +245,7 @@ def build_incident_ledger(
         "diagnosis": diag,
         "planned_action": planned,
         "corroboration": corroboration,
+        "amd_advisory": amd_advisory,
         "action_attempted": action_attempted,
         "action_executed": action_executed,
         "execution_note": execution_note,
@@ -253,6 +275,7 @@ def build_incident_ledger(
             {"field": "Action attempted", "value": str(action_attempted)},
             {"field": "Action executed", "value": str(action_executed)},
             {"field": "Execution note", "value": execution_note},
+            {"field": "AMD advisory", "value": amd_note or "unavailable"},
             {"field": "Verification ran", "value": str(ver is not None)},
             {"field": "Verification passed", "value":
                 "unavailable" if ver is None else str(verification_passed)},

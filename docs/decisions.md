@@ -129,3 +129,26 @@ channel table.
 - **Alternatives:** map all CWRU faults to one `bearing` class (rejected —
   masks the mechanism mismatch); ship a built-in channel table (rejected —
   could not verify it without the network).
+
+## ADR-010 — Measure the verification claim: naive-execution baseline
+
+**Date:** 2026-10-18
+**Status:** Accepted
+
+**Context:** ORBIT's differentiator — "executing an action is not fixing
+the machine" — was asserted by architecture and unit tests but never
+quantified against the common alternative (act, then assume success).
+Competitors publish numbers; judges ask for ours.
+
+**Decision:** `orbit/evaluation/comparison.py` runs both workflow arms
+over identical deterministic scenarios, detector, diagnosis, actions,
+preconditions, executor, environment and seeds. The naive arm is a
+subclass overriding the controller's `_verify_recovery` hook; it exists
+only inside the comparison harness, never in production paths. Ground
+truth is fresh post-cycle windows judged by the same baseline detector.
+Measured result (seed 53): ORBIT 0 incorrect resolutions of 1 claim,
+3/3 correct escalations; naive 3 false resolutions of 4 claims (75%).
+
+**Consequences:** the differentiator is now a reproducible number,
+shown in the README and the demo UI. The harness is simulator-only and
+labeled as such; it makes no industrial claim.

@@ -200,6 +200,36 @@ hardware was involved — see "What we do NOT claim" below.
 
 ---
 
+### AMD Token Factory advisory (live-verified)
+
+The second AMD technology in ORBIT is the **AMD Token Factory** hosted
+model (`DeepSeek-V4-Flash`, OpenAI-compatible endpoint, credentials only
+via `RADEON_API_KEY` in the environment or git-ignored `.env`). It acts
+as an **advisory evidence analyst**: after the deterministic diagnosis,
+the controller sends the compact recorded evidence payload (features,
+robust z-scores, detector breaches, evidence trend, ORBIT's own
+diagnosis, permitted actions) and receives a strictly-validated JSON
+advisory (assessment, supporting evidence, recommended action,
+model-reported confidence, escalation flag).
+
+**Live-verified 2026-10-18** (`docs/live-amd-verification.md`): one real
+request with the bearing-scenario payload returned a schema-valid
+advisory that cited the actual recorded z-scores and recommended the
+allowlisted action; the first attempt (30 s timeout) demonstrated the
+designed fallback live — the failure was recorded, never interpreted as
+a diagnosis or recovery, and the deterministic pipeline governed. The
+default timeout is 120 s; retries are disabled to conserve quota; only
+two live requests were made in total. Reproduce with
+`.venv/bin/python live_amd_check.py` (one request per run; never in CI).
+
+Safety boundaries (enforced in code, covered by 42 mocked tests):
+the advisory is recorded in the audit trail and its **only** permitted
+control-flow effect is a *conservative* escalation request; it cannot
+select, execute, or authorize actions, it cannot mark an incident
+RESOLVED, and an unavailable API changes nothing in the deterministic
+pipeline. No AMD GPU or ROCm execution is claimed for this integration —
+the model runs on AMD's hosted service; see "What we do NOT claim" below.
+
 ## Data source (honest)
 
 ORBIT runs entirely on **synthetic simulator data**. There is **no real
@@ -329,7 +359,35 @@ deterministic and rarely ambiguous on the clean synthetic signal. The
 escalation rates above are computed against the real engine's actual
 behaviour, not a fudge.
 
-**Test suite**: 170 passed, 1 skipped. The single skip
+**Verification vs naive execution** (reproducible:
+`python -m orbit.evaluation.comparison`, seed 53, five scenarios). Both
+workflow arms share detector, diagnosis, action library, preconditions,
+executor, environment and seeds; the only difference is whether a fix
+must pass the deterministic verifier before the incident closes. Ground
+truth = fresh post-cycle simulator windows judged by the same detector.
+
+| Scenario | Arm | Outcome | Machine actually OK? | Honest? |
+|---|---|---|---|---|
+| Healthy (control) | both | no incident | yes | yes |
+| Bearing fault, good spare | both | resolved | yes | yes |
+| Bearing fault, defective spare | ORBIT | **escalated** | no | **yes** |
+| Bearing fault, defective spare | naive | resolved | no | **NO** |
+| Imbalance, defective balancing | ORBIT | **escalated** | no | **yes** |
+| Imbalance, defective balancing | naive | resolved | no | **NO** |
+| Overheating, ineffective service | ORBIT | **escalated** | no | **yes** |
+| Overheating, ineffective service | naive | resolved | no | **NO** |
+
+Summary: ORBIT **0 incorrect resolutions** of 1 resolution claim (rate
+0.00), 3/3 escalations correct. The naive execution-trust baseline made
+**3 false resolution claims out of 4 (75% false-resolution rate)** — it
+declared success on machines that were still broken. This table is the
+measured form of ORBIT's central claim: *executing an action is not
+fixing the machine.* It describes the synthetic simulator only. The demo
+UI shows the same measured table plus a transparent business-value
+projection calculator (formulas and adjustable assumptions, clearly
+labeled as projections, not savings).
+
+**Test suite**: 231 passed, 1 skipped. The single skip
 (`tests/test_diagnosis.py::test_weak_fault_low_confidence_label`) is a
 deliberate honesty guard — at bearing severity 0.15 the fault is
 borderline and can cross the confident threshold for this particular

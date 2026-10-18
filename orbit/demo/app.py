@@ -631,6 +631,10 @@ with st.sidebar:
     monitor_interval = st.slider("Monitoring interval (s)", 5, 120, 60)
     use_classifier = st.toggle("Neural corroboration", value=True,
                                help="Optional. Requires trained weights. Never authoritative.")
+    use_amd = st.toggle("AMD advisory (Token Factory)", value=False,
+                        help="Optional. Requires RADEON_API_KEY in the environment or .env. "
+                             "The model's recommendation is recorded in the audit trail; "
+                             "it never executes actions and can never declare recovery.")
     defective_spare = st.toggle("Simulate defective spare (quality 0)", value=False)
     with st.expander("Custom machine state (advanced)"):
         st.caption("Override the named scenario with explicit severities to explore "
@@ -672,6 +676,7 @@ if run:
             "use_classifier": use_classifier,
         }
         run_label = scenario + (" (custom)" if machine_state else "")
+    call_kwargs["use_amd"] = use_amd
     with st.spinner("Running deterministic recovery loop (observe, detect, diagnose, "
                     "plan, act, verify)..."):
         try:
@@ -968,6 +973,31 @@ with tab_inc:
                 st.caption("Neural corroboration: none recorded (classifier disabled or "
                            "weights unavailable).")
 
+            # AMD Token Factory advisory - a recorded recommendation only.
+            # It never executes anything and can never declare recovery;
+            # the executed action and the verifier's verdict are separate.
+            amd = (planned or {}).get("amd_advisory")
+            if amd and amd.get("available"):
+                body = (f"AMD advisory ({amd.get('model')}): recommends "
+                        f"{amd.get('recommended_action')!r} - confidence "
+                        f"{amd.get('confidence')} (model-reported, not calibrated). "
+                        f"This is a recommendation, not the executed action "
+                        f"({planned.get('action')!r}) and not a verified recovery.")
+                if not amd.get("agrees_with_plan"):
+                    body += (" It disagrees with ORBIT's deterministic plan, "
+                             "which governs.")
+                if not amd.get("action_supported"):
+                    body += (" The recommended action is outside ORBIT's permitted "
+                             "actions and was not executed.")
+                st.info(body)
+            elif amd:
+                st.caption(f"AMD advisory unavailable ({amd.get('reason')}) - the "
+                           "deterministic pipeline governed. An API failure is never "
+                           "interpreted as a diagnosis or recovery.")
+            else:
+                st.caption("AMD advisory: not run (toggle off or credentials not "
+                           "configured).")
+
             # Detail expanders keep the main flow concise
             _render_diagnosis_detail(diag, planned)
             if planned:
@@ -1127,3 +1157,98 @@ with tab_eval:
                   help=f"{rec['escalate_correct']}/{rec['escalate_designed']} designed-to-escalate")
         d3.metric("Mean end-to-end latency", f"{rec['mean_end_to_end_latency_ms']} ms")
         st.caption(ev["data_source"] + " - " + ev["detection"].get("note", ""))
+
+    # --- Verification vs naive execution (measured, deterministic) -------
+    st.markdown("###### Why verification matters - measured on this machine")
+    st.caption("Both workflow arms see the same detector, diagnosis, action "
+               "library and seeds; the only difference is whether a fix must "
+               "pass independent verification before the incident closes. "
+               "Synthetic simulator scenarios, fixed seed - reproducible via "
+               "`python -m orbit.evaluation.comparison`.")
+
+    @st.cache_data(show_spinner="Running verification comparison...")
+    def _comparison_report() -> Dict[str, Any]:
+        from orbit.evaluation.comparison import run_comparison
+        return run_comparison()
+
+    comparison = _comparison_report()
+    c_orbit = comparison["summary"]["orbit"]
+    c_naive = comparison["summary"]["naive"]
+    v1, v2, v3 = st.columns(3)
+    v1.metric("ORBIT false-resolution rate",
+              f"{c_orbit['false_resolution_rate']:.2f}",
+              help=f"{c_orbit['incorrect_resolutions']} incorrect of "
+                   f"{c_orbit['false_resolution_denominator']} resolution claim(s)")
+    v2.metric("Naive workflow false-resolution rate",
+              f"{c_naive['false_resolution_rate']:.2f}",
+              help=f"{c_naive['incorrect_resolutions']} incorrect of "
+                   f"{c_naive['false_resolution_denominator']} resolution claim(s)")
+    v3.metric("ORBIT correct escalations",
+              f"{c_orbit['correct_escalations']}/{c_orbit['escalations']}",
+              help="Escalations of machines that truly had not recovered - "
+                   "refusing an unproven success claim is the correct behavior.")
+
+    comp_rows = [{
+        "Scenario": r["label"],
+        "Workflow": "ORBIT (verify)" if r["arm"] == "orbit" else "Naive (trust execution)",
+        "Outcome": r["final_status"].lower() if r["incident_opened"] else "no incident",
+        "Machine actually OK": "yes" if r["ground_truth_recovered"] else "NO",
+        "Honest workflow?": "yes" if r["behavior_correct"] else "NO",
+    } for r in comparison["rows"]]
+    st.dataframe(pd.DataFrame(comp_rows), hide_index=True, use_container_width=True)
+    st.caption("\"Honest workflow?\" means: never claims RESOLVED of an unrecovered "
+               "machine, never opens incidents on a healthy one. Escalating an "
+               "unrecovered machine IS honest - the machine stays broken and ORBIT "
+               "says so instead of declaring success. Naive resolution claims are "
+               "marked dishonest exactly when the machine had not recovered.")
+
+    # --- Business value projection (assumptions included) ----------------
+    with st.expander("Business value projection - every assumption adjustable"):
+        st.caption("A transparent calculator, not a savings claim. Formulas are "
+                   "shown; every input is adjustable; results are ranges under "
+                   "your assumptions. The failed-recovery fraction defaults to "
+                   "the rate measured in the synthetic comparison above (0.75 "
+                   "for a naive workflow) - replace it with your plant's data.")
+        b1, b2, b3 = st.columns(3)
+        incidents = b1.number_input("Incidents per year", 0.0, 10000.0, 24.0, 1.0)
+        dt_hours = b2.number_input("Downtime hours / incident", 0.0, 1000.0, 4.0, 0.5)
+        dt_cost = b3.number_input("Cost per downtime hour ($)", 0.0, 1e7, 10000.0, 500.0)
+        b4, b5, b6 = st.columns(3)
+        tech_hours = b4.number_input("Technician hours / incident", 0.0, 100.0, 3.0, 0.5)
+        tech_cost = b5.number_input("Technician cost / hour ($)", 0.0, 5000.0, 90.0, 5.0)
+        fail_frac = b6.slider("Interventions that silently fail", 0.0, 1.0, 0.75, 0.05,
+                              help="Default = naive-workflow false-resolution rate "
+                                   "measured in ORBIT's synthetic scenarios.")
+        b7, b8, b9 = st.columns(3)
+        repeat_share = b7.slider("Downtime recurring before true fix", 0.0, 1.0, 0.5, 0.05)
+        diag_reduction = b8.slider("Diagnosis time saved by evidence ledger", 0.0, 1.0, 0.3, 0.05,
+                                   help="Assumption, not a measurement.")
+        sensitivity = b9.slider("Sensitivity band", 0.0, 0.3, 0.1, 0.05)
+
+        from orbit.evaluation.business import ValueInputs, estimate_value
+        projection = estimate_value(ValueInputs(
+            incidents_per_year=incidents,
+            downtime_hours_per_incident=dt_hours,
+            cost_per_downtime_hour=dt_cost,
+            technician_hours_per_incident=tech_hours,
+            technician_cost_per_hour=tech_cost,
+            failed_recovery_fraction=fail_frac,
+            repeat_downtime_share=repeat_share,
+            diagnosis_time_reduction=diag_reduction,
+            sensitivity=sensitivity,
+        ))
+        est_rows = [{
+            "Component": line["term"],
+            "Annual value ($)": f"{line['value']:,.0f}",
+            "Formula": line["formula"],
+        } for line in projection.lines]
+        est_rows.append({
+            "Component": "Projected annual total (low / base / high)",
+            "Annual value ($)": (f"{projection.low:,.0f} / "
+                                 f"{projection.total_estimate:,.0f} / "
+                                 f"{projection.high:,.0f}"),
+            "Formula": "sum of the components above, fractions +/- sensitivity",
+        })
+        st.dataframe(pd.DataFrame(est_rows), hide_index=True, use_container_width=True)
+        st.error("Projection under stated assumptions - NOT measured savings. "
+                 "All fault scenarios are simulated; no customer deployments exist.")

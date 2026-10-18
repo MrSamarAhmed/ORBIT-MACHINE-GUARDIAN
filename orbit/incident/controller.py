@@ -12,6 +12,10 @@ Design rules (inherited from the MaintAI trust model):
 * Precondition failures block the intervention and escalate.
 * Every phase transition is recorded with its evidence, producing a
   complete audit trail of what the agent knew and did at each step.
+* The optional AMD Token Factory advisory reads recorded evidence and
+  recommends, but never decides: it cannot select the action, cannot
+  execute, and cannot declare recovery. Its only permitted effect is the
+  conservative one — requesting escalation for human review.
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from orbit.actions.environment import MaintenanceEnvironment
 from orbit.actions.executor import ActionExecutor, ActionResult
+from orbit.amd.advisor import build_evidence_payload
 from orbit.config import MotorConfig
 from orbit.detection.baseline import AnomalyResult, BaselineDetector
 from orbit.diagnosis.engine import DiagnosisEngine, DiagnosisResult
@@ -31,6 +36,7 @@ from orbit.simulator.motor import MachineState, MotorSimulator
 
 if TYPE_CHECKING:  # torch-backed, imported only for type checking
     from orbit.model.inference import FaultClassifier as CorroboratingClassifier
+    from orbit.amd.advisor import AmdAdvisor
 
 DEFAULT_MONITOR_WINDOWS = 3
 DEFAULT_MONITOR_INTERVAL_S = 60.0
@@ -63,6 +69,7 @@ class IncidentRecord:
     final_status: Optional[str] = None
     diagnosis: Optional[DiagnosisResult] = None
     corroboration: Optional[Dict[str, Any]] = None
+    amd_advisory: Optional[Dict[str, Any]] = None
     action_id: Optional[str] = None
     verification: Optional[VerificationOutcome] = None
     escalation_reason: Optional[str] = None
@@ -79,6 +86,7 @@ class IncidentRecord:
             "opened_by_breach": self.opened_by_breach,
             "diagnosis": self.diagnosis.as_summary() if self.diagnosis else None,
             "corroboration": self.corroboration,
+            "amd_advisory": self.amd_advisory,
             "action_id": self.action_id,
             "attempts_used": self.attempts_used,
             "verification": self.verification.as_dict() if self.verification else None,
@@ -114,6 +122,7 @@ class IncidentController:
         environment: Optional[MaintenanceEnvironment] = None,
         executor: Optional[ActionExecutor] = None,
         classifier: Optional["CorroboratingClassifier"] = None,
+        amd_advisor: Optional["AmdAdvisor"] = None,
         config: Optional[MotorConfig] = None,
         monitor_windows: int = DEFAULT_MONITOR_WINDOWS,
         monitor_interval_s: float = DEFAULT_MONITOR_INTERVAL_S,
@@ -134,6 +143,7 @@ class IncidentController:
         self.environment = environment if environment is not None else MaintenanceEnvironment()
         self.executor = executor if executor is not None else ActionExecutor()
         self.classifier = classifier
+        self.amd_advisor = amd_advisor
         self.config = config if config is not None else simulator.config
         self.monitor_windows = monitor_windows
         self.monitor_interval_s = float(monitor_interval_s)
@@ -170,6 +180,79 @@ class IncidentController:
             "mapped_hypothesis": predicted_mode,
             "device": result["device"],
         }
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _diagnosis_trend(incident: IncidentRecord) -> List[Dict[str, Any]]:
+        """Top hypothesis scores across the recorded diagnosis rounds.
+
+        Real trend data: every ambiguous-evidence DIAGNOSING phase stores
+        its ranked hypotheses, so the advisor sees how the ranking evolved
+        instead of only the final verdict. Phases that recorded nothing
+        contribute nothing.
+        """
+        trend: List[Dict[str, Any]] = []
+        for phase in incident.phases:
+            if phase.phase != "DIAGNOSING":
+                continue
+            hypotheses = phase.evidence.get("hypotheses")
+            if not hypotheses:
+                continue
+            runner = hypotheses[1] if len(hypotheses) > 1 else {}
+            trend.append({
+                "top": hypotheses[0].get("mode"),
+                "top_score": hypotheses[0].get("score"),
+                "runner_up": runner.get("mode"),
+                "runner_up_score": runner.get("score"),
+            })
+        return trend
+
+    def _consult_amd_advisor(
+        self,
+        incident: IncidentRecord,
+        features: Dict[str, float],
+        anomaly: AnomalyResult,
+        diagnosis: DiagnosisResult,
+        corroboration: Optional[Dict[str, object]],
+    ) -> Optional[Dict[str, Any]]:
+        """Consult the optional AMD advisory model. Advisory only.
+
+        The advisor receives evidence ORBIT has already recorded and
+        returns a structured recommendation. It can never select the
+        executed action, never execute anything, and never declare
+        recovery: a valid recommendation is recorded with an
+        ``agrees_with_plan`` verdict while ORBIT's deterministic plan
+        governs; an API or schema failure yields ``available: False`` and
+        changes nothing.
+        """
+        if self.amd_advisor is None:
+            return None
+        try:
+            payload = build_evidence_payload(
+                incident_id=incident.incident_id,
+                features=features,
+                anomaly=anomaly,
+                diagnosis=diagnosis,
+                corroboration=corroboration,
+                evidence_trend=self._diagnosis_trend(incident),
+            )
+            result = self.amd_advisor.assess(payload)
+        except Exception as exc:  # defensive: an advisor bug must not stop the loop
+            result = {
+                "available": False,
+                "provider": "amd_token_factory",
+                "reason": "advisor_unexpected_error",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "diagnosis_produced": False,
+                "recovery_declared": False,
+            }
+        if result.get("available") and result.get("recommended_action") is not None:
+            result["agrees_with_plan"] = (
+                result["recommended_action"]
+                == (diagnosis.recommended_action.action_id
+                    if diagnosis.recommended_action else None)
+            )
+        return result
 
     # ------------------------------------------------------------------
     def run_cycle(self) -> CycleResult:
@@ -271,6 +354,17 @@ class IncidentController:
                 corroboration["mapped_hypothesis"] == diagnosis.primary.mode_id
             )
 
+        # AMD Token Factory advisory (optional): evidence analysis only.
+        # Recorded verbatim; the deterministic plan below still governs.
+        amd_advisory = self._consult_amd_advisor(
+            incident=incident,
+            features=features,
+            anomaly=anomaly,
+            diagnosis=diagnosis,
+            corroboration=corroboration,
+        )
+        incident.amd_advisory = amd_advisory
+
         # --- PLAN ---
         ok, failures = self.executor.check_preconditions(action, self.environment)
         self._transition(
@@ -285,6 +379,7 @@ class IncidentController:
                     e.as_dict() for e in diagnosis.primary.contradicting
                 ],
                 "neural_corroboration": corroboration,
+                "amd_advisory": amd_advisory,
                 "action": action.action_id,
                 "preconditions": [
                     {"id": p.requirement_id, "description": p.description}
@@ -304,6 +399,24 @@ class IncidentController:
                 incident,
                 diagnosis,
                 reason="intervention preconditions not met: " + "; ".join(failures),
+            )
+            return incident
+
+        # The advisory's only permitted control-flow effect is the
+        # conservative one: requesting human review before any simulated
+        # intervention. It cannot select the action and cannot declare
+        # recovery; only verify_recovery below may reach RESOLVED. An
+        # unavailable or failed advisory never escalates or blocks.
+        if amd_advisory is not None and amd_advisory.get("available") \
+                and amd_advisory.get("needs_escalation"):
+            self._escalate(
+                incident,
+                diagnosis,
+                reason=(
+                    f"AMD advisory ({amd_advisory.get('model')}) requested "
+                    f"human review before intervention: "
+                    f"{amd_advisory.get('assessment')}"
+                ),
             )
             return incident
 
@@ -341,7 +454,7 @@ class IncidentController:
                 post_rows.append(row)
 
             self._transition("VERIFYING", incident, "verifying recovery conditions")
-            outcome = verify_recovery(action, post_rows)
+            outcome = self._verify_recovery(action, post_rows)
             incident.verification = outcome
             incident.action_id = action.action_id
             if outcome.passed:
@@ -376,6 +489,15 @@ class IncidentController:
             )
 
     # ------------------------------------------------------------------
+    def _verify_recovery(self, action, post_rows):
+        """Deterministic verification — the only path to RESOLVED.
+
+        Hook method so the evaluation comparison harness can instantiate
+        a naive no-verification baseline by overriding it. Production
+        code always takes the deterministic verifier.
+        """
+        return verify_recovery(action, post_rows)
+
     def _escalate(self, incident: IncidentRecord, diagnosis: DiagnosisResult,
                   reason: str) -> None:
         action = diagnosis.recommended_action
