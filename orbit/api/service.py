@@ -76,7 +76,7 @@ def _load_classifier():
     try:
         from orbit.model.inference import FaultClassifier
 
-        return FaultClassifier.load()
+        return FaultClassifier.load(weights_path=MODEL_WEIGHTS_PATH)
     except Exception as exc:  # pragma: no cover - environment-dependent
         return {"load_error": str(exc)}
 

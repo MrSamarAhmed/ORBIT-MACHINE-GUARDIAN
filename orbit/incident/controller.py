@@ -19,8 +19,10 @@ Design rules (inherited from the MaintAI trust model):
 """
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from numbers import Real
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from orbit.actions.environment import MaintenanceEnvironment
@@ -131,8 +133,11 @@ class IncidentController:
     ):
         if monitor_windows < 1:
             raise ValueError("monitor_windows must be >= 1")
-        if monitor_interval_s < 0:
-            raise ValueError("monitor_interval_s must be >= 0")
+        if (isinstance(monitor_interval_s, bool)
+                or not isinstance(monitor_interval_s, Real)
+                or not math.isfinite(monitor_interval_s)
+                or monitor_interval_s < 0):
+            raise ValueError("monitor_interval_s must be a finite number >= 0")
         if evidence_rounds < 1:
             raise ValueError("evidence_rounds must be >= 1")
         if verification_windows < 1:
@@ -324,11 +329,12 @@ class IncidentController:
             )
             features, anomaly, window = self._sample_features()
             if not anomaly.is_anomaly:
-                self._resolve_incident(
+                incident.diagnosis = diagnosis
+                self._escalate(
                     incident,
                     diagnosis,
                     reason="anomaly did not persist across evidence windows; "
-                           "treating as transient and closing",
+                           "transient recovery remains unverified; human review required",
                 )
                 return incident
             diagnosis = self.engine.diagnose(anomaly, features, self.detector)

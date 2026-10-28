@@ -210,11 +210,21 @@ def test_history_marks_current_run_apart_from_historical():
 
 
 # --- Benchmarks and evaluation ---------------------------------------------
-def test_latency_chart_is_drawn_from_recorded_measurements():
+@pytest.mark.parametrize("platforms", [("cpu",), ("cpu", "mps"), ("cpu", "cuda"), ("cpu", "rocm")])
+def test_latency_chart_is_drawn_from_recorded_measurements(monkeypatch, platforms):
+    bench = {"results": [
+        {"device": {"platform": platform, "device_type": platform,
+                    "device_name": DEV_NAMES[platform]},
+         "measurements": [
+             {"batch_size": 1, "latency_mean_ms": 7.0,
+              "throughput_windows_per_s": 1000 / 7},
+             {"batch_size": 8, "latency_mean_ms": 3.0,
+              "throughput_windows_per_s": 8000 / 3},
+         ]}
+        for platform in platforms
+    ]}
+    monkeypatch.setattr(service, "latest_benchmark", lambda: bench)
     at = _render()
-    bench = service.latest_benchmark()
-    if bench.get("available") is False:
-        pytest.skip(f"no benchmark recorded: {bench.get('reason')}")
 
     el, spec = _latency_chart_element(at)
     assert el is not None, "CPU/MPS latency chart not rendered"
@@ -239,7 +249,8 @@ def test_latency_chart_is_drawn_from_recorded_measurements():
 
     caps = _captions_text(at)
     assert "without smoothing or correction" in caps
-    assert "Apple Silicon (MPS)" in caps
+    if "mps" in platforms:
+        assert "Apple Silicon (MPS)" in caps
     has_amd = any(str(r["device"].get("device_type", "")).lower() in ("rocm", "cuda")
                   for r in bench["results"])
     if not has_amd:
@@ -247,7 +258,16 @@ def test_latency_chart_is_drawn_from_recorded_measurements():
         assert "labeled as MPS, never as AMD" in caps
 
 
-def test_evaluation_metrics_separated_from_current_incident():
+def test_evaluation_metrics_separated_from_current_incident(monkeypatch):
+    monkeypatch.setattr(service, "evaluation_results", lambda: {
+        "data_source": "Synthetic presentation fixture, not measured performance",
+        "detection": {"note": "UI layout test only"},
+        "recovery": {
+            "recovery_success_rate": 1.0, "resolve_correct": 1, "resolve_designed": 1,
+            "correct_escalation_rate": 1.0, "escalate_correct": 1, "escalate_designed": 1,
+            "mean_end_to_end_latency_ms": 12.0,
+        },
+    })
     at = _render()
     _run_preset(at, "failed_recovery")
     caps = _captions_text(at)

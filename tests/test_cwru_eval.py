@@ -151,7 +151,16 @@ def test_confusion_matrix_and_prf():
 
 
 # --- full pipeline ---------------------------------------------------------
-def test_full_run_on_fixture_produces_expected_keys(cwru_dir, tmp_path):
+def test_full_run_on_fixture_produces_expected_keys(cwru_dir, tmp_path, monkeypatch):
+    import torch
+    from orbit.model.cnn import FaultCNN
+
+    monkeypatch.chdir(tmp_path)
+    weights = tmp_path / "runtime/model/fault_cnn.pt"
+    weights.parent.mkdir(parents=True)
+    with torch.random.fork_rng():
+        torch.manual_seed(42)
+        torch.save(FaultCNN().state_dict(), weights)
     out = tmp_path / "cwru_results.json"
     res = cwru.run_cwru_evaluation(
         data_dir=cwru_dir, fs=FS, out_path=out,
@@ -174,8 +183,7 @@ def test_full_run_on_fixture_produces_expected_keys(cwru_dir, tmp_path):
     assert "inner_race" in clf["excluded_folders"]
     assert "ball" in clf["excluded_folders"]
     assert clf["windows"] > 0
-    # synthetic-trained transfer on a trivial fixture should be near-perfect,
-    # but the caveat string must be present regardless.
+    # Random fixture weights exercise inference/schema, not predictive accuracy.
     assert "SYNTHETIC" in clf["note"]
 
 

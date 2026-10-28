@@ -346,7 +346,7 @@ def evaluate_classifier_transfer(
     mapped = [r for r in recordings if r.orbit_class is not None]
     excluded = sorted({r.folder_label for r in recordings if r.orbit_class is None})
 
-    clf = FaultClassifier.load("cpu")
+    clf = FaultClassifier.load("cpu", weights_path=Path(weights_path))
     X: List[np.ndarray] = []
     y: List[int] = []
     for rec in mapped:

@@ -11,6 +11,7 @@ feature rows it always returns the same verdict.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
 
@@ -61,13 +62,22 @@ def verify_recovery(
         raise ValueError("at least one post-intervention window is required")
     if not action.verification:
         raise ValueError(f"action {action.action_id} declares no verification conditions")
-    results: List[ConditionResult] = []
-    for position, row in enumerate(feature_rows):
+    # Validate all inputs before evaluating any recovery condition.
+    for condition in action.verification:
+        if not math.isfinite(condition.threshold):
+            raise ValueError(f"threshold for {condition.name!r} must be finite")
+    for row in feature_rows:
         for condition in action.verification:
             if condition.feature not in row:
                 raise ValueError(
                     f"feature {condition.feature!r} missing from verification window"
                 )
+            if not math.isfinite(float(row[condition.feature])):
+                raise ValueError(f"observation for {condition.feature!r} must be finite")
+
+    results: List[ConditionResult] = []
+    for position, row in enumerate(feature_rows):
+        for condition in action.verification:
             results.append(
                 ConditionResult(
                     condition=condition,

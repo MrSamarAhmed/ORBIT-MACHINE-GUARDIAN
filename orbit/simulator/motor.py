@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
+from numbers import Real
 from typing import Dict, Optional
 
 import numpy as np
@@ -39,6 +40,10 @@ class MachineState:
     load: float = 1.0                 # fraction of nominal load
 
     def __post_init__(self) -> None:
+        for name in ("bearing_severity", "imbalance_severity", "cooling_efficiency", "load"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number")
         for name in ("bearing_severity", "imbalance_severity"):
             value = getattr(self, name)
             if not 0 <= value <= 1:

@@ -10,7 +10,9 @@ Everything here is simulated; nothing connects to real equipment.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from numbers import Real
 
 
 if __name__ == "__main__":
@@ -35,9 +37,17 @@ class MaintenanceEnvironment:
     maintenance_window_minutes: float = 30.0
 
     def __post_init__(self) -> None:
-        for name in ("spare_bearing_quality", "balancing_quality", "cooling_service_quality"):
+        for name in ("machine_stoppable", "spare_bearing_available",
+                     "balancing_kit_available", "reduced_load_possible"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a boolean")
+        for name in ("spare_bearing_quality", "balancing_quality",
+                     "cooling_service_quality", "maintenance_window_minutes"):
             value = getattr(self, name)
-            if not 0 <= value <= 1:
+            if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number")
+            if name == "maintenance_window_minutes":
+                if value < 0:
+                    raise ValueError("maintenance_window_minutes must be >= 0")
+            elif not 0 <= value <= 1:
                 raise ValueError(f"{name} must be in [0, 1], got {value}")
-        if self.maintenance_window_minutes < 0:
-            raise ValueError("maintenance_window_minutes must be >= 0")
